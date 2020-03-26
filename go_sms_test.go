@@ -1,4 +1,4 @@
-package goes_ms
+package goes_ms_test
 
 // import "fmt"
 
