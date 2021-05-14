@@ -46,6 +46,10 @@ func NewClicknicSenderToProxy(url string, proxyURL *url.URL) *SmsSender {
 	}
 }
 
+func (sd *SmsSender) ChangeSender(name string) {
+	sd.sender = name
+}
+
 func (sd *SmsSender) SendSms(mobileNo, message string) *SmsStatus {
 	var mobileNumberForSending string
 	if strings.HasPrefix(mobileNo, "0") {
