@@ -2,111 +2,77 @@ package goes_ms
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
-	"strings"
-
-	"github.com/spf13/viper"
-)
-
-const (
-	keyConfig = "Clicknic-sender"
-	user      = "user"
-	password  = "password"
-	sender    = "sender"
 )
 
 type SmsSender struct {
-	client    *http.Client
-	smsApiUrl string
-	user      string
-	password  string
-	sender    string
+	client *http.Client
+	cred   *Credentials
 }
 
-func NewDefaultClicknicSender(url string) *SmsSender {
-	clicknicSender := viper.GetStringMapString(keyConfig)
+func NewSender(cred *Credentials) *SmsSender {
+	return NewSenderWithProxy(cred, nil)
+}
+
+func NewSenderWithProxy(cred *Credentials, proxyURL *url.URL) *SmsSender {
+	transport := http.DefaultTransport
+	if proxyURL != nil {
+		transport = &http.Transport{Proxy: http.ProxyURL(proxyURL)}
+	}
 	return &SmsSender{
-		client:    http.DefaultClient,
-		smsApiUrl: url,
-		user:      clicknicSender[user],
-		password:  clicknicSender[password],
-		sender:    clicknicSender[sender],
+		client: &http.Client{Transport: transport},
+		cred:   cred,
 	}
 }
 
-func NewClicknicSenderToProxy(url string, proxyURL *url.URL) *SmsSender {
-	clicknicSender := viper.GetStringMapString(keyConfig)
-	return &SmsSender{
-		client:    &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}},
-		smsApiUrl: url,
-		user:      clicknicSender[user],
-		password:  clicknicSender[password],
-		sender:    clicknicSender[sender],
-	}
-}
-
-func (sd *SmsSender) ChangeSender(name string) {
-	sd.sender = name
-}
-
-func (sd *SmsSender) SendSms(mobileNo, message string) *SmsStatus {
-	var mobileNumberForSending string
-	if strings.HasPrefix(mobileNo, "0") {
-		mobileNumberForSending = "+66" + mobileNo[1:]
-	} else {
-		mobileNumberForSending = mobileNo
+func (s *SmsSender) Send(ctx context.Context, body *Body) (*http.Response, error) {
+	if body == nil {
+		return nil, errors.New("the body must not be nil")
 	}
 
-	return sd.send(mobileNumberForSending, message)
-}
-
-const (
-	headerUserAgent   = "User-Agent"
-	headerContentType = "Content-Type"
-)
-
-func (sd *SmsSender) send(mobileNo, message string) *SmsStatus {
-	body := make(url.Values)
-	sd.addBasicParams(body)
-	body.Add("Msnlist", mobileNo)
-	body.Add("Msg", message)
-
-	httpReq, err := http.NewRequest(http.MethodPost, sd.smsApiUrl, bytes.NewReader([]byte(body.Encode())))
+	buf, err := json.Marshal(body)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
-	httpReq.Header.Set(headerUserAgent, "Mozilla/5.0")
-	httpReq.Header.Set(headerContentType, "application/x-www-form-urlencoded")
 
-	statusSms := new(SmsStatus)
-	resp, err := sd.client.Do(httpReq)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://portal-otp.smsmkt.com/api/send-message", bytes.NewBuffer(buf))
 	if err != nil {
-		statusSms.HttpStatus = resp.StatusCode
-		statusSms.Status = STATUS_ERROR
-		statusSms.Reason = err.Error()
-	} else if resp.StatusCode != http.StatusOK {
-		statusSms.HttpStatus = resp.StatusCode
-		statusSms.Status = STATUS_ERROR
-	} else {
-		statusSms.Status = STATUS_SUCCESS
+		return nil, err
 	}
-	return statusSms
+
+	req.Header.Add("Content-Type", "application/json")
+	req.Header.Add("api_key", s.cred.ApiKey)
+	req.Header.Add("secret_key", s.cred.SecretKey)
+
+	return s.client.Do(req)
 }
 
-func (sd *SmsSender) addBasicParams(body url.Values) {
-	body.Add("User", sd.user)
-	body.Add("Password", sd.password)
-	body.Add("Sender", sd.sender)
+type Credentials struct {
+	ApiKey, SecretKey string
 }
 
-const (
-	STATUS_SUCCESS = iota + 1
-	STATUS_ERROR
-)
+type Body struct {
 
-type SmsStatus struct {
-	Status     int
-	HttpStatus int
-	Reason     string
+	// Message is a message to recipients.
+	Message string `json:"message"`
+
+	// Phone is a destination's phone number, and, or can be multiple numbers seperated by comma.
+	Phone string `json:"phone"`
+
+	// sender name that approved by the APIs provider.
+	Sender string `json:"sender"`
+
+	// SendDate is a scheduled date in YYYY-MM-DD HH:mm:ss format.
+	SendDate string `json:"send_date"`
+
+	// URL is an url to provide to receive a result of sending the message.
+	URL string `json:"url"`
+
+	// Expire is the message's expiry in HH:mm format. valid range: 5m < expire < 11h
+	// When expired, recipients will not receive the message.
+	Expire string `json:"expire"`
 }
